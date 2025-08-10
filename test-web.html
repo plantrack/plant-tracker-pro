@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plant Tracker API Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            background: #27ae60;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #229954;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .demo-box {
+            background: #e8f5e9;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌱 Plant Tracker API Test</h1>
+        
+        <div class="demo-box">
+            <strong>Demo Account:</strong><br>
+            Username: demo<br>
+            Password: demo123
+        </div>
+
+        <div class="form-group">
+            <label>Username:</label>
+            <input type="text" id="username" value="demo">
+        </div>
+        
+        <div class="form-group">
+            <label>Password:</label>
+            <input type="password" id="password" value="demo123">
+        </div>
+        
+        <button onclick="testLogin()">Test Login</button>
+        
+        <div id="result"></div>
+        
+        <div class="section" id="afterLogin" style="display:none;">
+            <h3>Test Other Endpoints</h3>
+            <button onclick="getFields()">Get Fields</button>
+            <button onclick="getPlants()">Get Plants</button>
+            <button onclick="createField()">Create Test Field</button>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:3000';
+        let authToken = null;
+        
+        async function testLogin() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const resultDiv = document.getElementById('result');
+            
+            try {
+                const response = await fetch(`${API_URL}/api/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    authToken = data.token;
+                    resultDiv.className = 'result success';
+                    resultDiv.textContent = '✅ Login successful!\n\nUser: ' + JSON.stringify(data.user, null, 2) + '\n\nToken saved for further requests.';
+                    document.getElementById('afterLogin').style.display = 'block';
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.textContent = '❌ Login failed: ' + (data.error || 'Unknown error');
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = '❌ Network error: ' + error.message;
+            }
+        }
+        
+        async function getFields() {
+            const resultDiv = document.getElementById('result');
+            
+            try {
+                const response = await fetch(`${API_URL}/api/fields`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.className = 'result success';
+                    resultDiv.textContent = '✅ Fields:\n' + JSON.stringify(data, null, 2);
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.textContent = '❌ Error: ' + (data.error || 'Unknown error');
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = '❌ Network error: ' + error.message;
+            }
+        }
+        
+        async function getPlants() {
+            const resultDiv = document.getElementById('result');
+            
+            try {
+                const response = await fetch(`${API_URL}/api/plants`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.className = 'result success';
+                    resultDiv.textContent = '✅ Plants:\n' + JSON.stringify(data, null, 2);
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.textContent = '❌ Error: ' + (data.error || 'Unknown error');
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = '❌ Network error: ' + error.message;
+            }
+        }
+        
+        async function createField() {
+            const resultDiv = document.getElementById('result');
+            
+            try {
+                const response = await fetch(`${API_URL}/api/fields`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: 'Test Field ' + Date.now(),
+                        size_acres: 10,
+                        crop_type: 'Corn'
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.className = 'result success';
+                    resultDiv.textContent = '✅ Field created:\n' + JSON.stringify(data, null, 2);
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.textContent = '❌ Error: ' + (data.error || 'Unknown error');
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = '❌ Network error: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>
