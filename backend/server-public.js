@@ -1,5 +1,5 @@
 const express = require('express');
-const Database = require('better-sqlite3');
+const sqlite3 = require('sqlite3').verbose();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -53,128 +53,80 @@ const upload = multer({
   }
 });
 
-const db = new Database('./plants.db');
+// Initialize SQLite database with sqlite3
+const db = new sqlite3.Database('./plants.db');
 
-// Initialize database tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    email TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    farm_name TEXT,
-    spreadsheet_id TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
+// Create tables
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      farm_name TEXT,
+      spreadsheet_id TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS fields (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    size_acres REAL,
-    crop_type TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  )
-`);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS fields (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      size_acres REAL,
+      crop_type TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `);
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS plants (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    field_id INTEGER,
-    location_id TEXT NOT NULL,
-    latitude REAL NOT NULL,
-    longitude REAL NOT NULL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    photo_path TEXT,
-    notes TEXT,
-    plant_type TEXT,
-    growth_stage TEXT,
-    height_cm REAL,
-    health_score INTEGER,
-    synced_to_sheets BOOLEAN DEFAULT 0,
-    FOREIGN KEY (user_id) REFERENCES users(id),
-    FOREIGN KEY (field_id) REFERENCES fields(id)
-  )
-`);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS plants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      field_id INTEGER,
+      location_id TEXT NOT NULL,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      photo_path TEXT,
+      notes TEXT,
+      plant_type TEXT,
+      growth_stage TEXT,
+      height_cm REAL,
+      health_score INTEGER,
+      synced_to_sheets BOOLEAN DEFAULT 0,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (field_id) REFERENCES fields(id)
+    )
+  `);
 
-db.exec(`CREATE INDEX IF NOT EXISTS idx_location ON plants(location_id)`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_user_plants ON plants(user_id)`);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_coords ON plants(latitude, longitude)`);
-
-// Create demo user with correct password hash
-const insertDemo = db.prepare(`
-  INSERT OR IGNORE INTO users (username, email, password, farm_name, spreadsheet_id) 
-  VALUES (?, ?, ?, ?, ?)
-`);
-
-try {
-  // This hash is for password "demo123"
-  insertDemo.run(
-    'demo', 
-    'demo@planttracker.com', 
-    '$2a$10$EkgIbzusalAjNsFdUGCMCOawbqq1xpSHy.C4CtTeL2AjVw47v04eO', 
-    'Demo Farm',
-    'not_configured'
+  // Create demo user (password: demo123)
+  const hashedDemoPassword = '$2a$10$EkgIbzusalAjNsFdUGCMCOawbqq1xpSHy.C4CtTeL2AjVw47v04eO';
+  db.run(
+    `INSERT OR IGNORE INTO users (username, email, password, farm_name, spreadsheet_id) VALUES (?, ?, ?, ?, ?)`,
+    ['demo', 'demo@planttracker.com', hashedDemoPassword, 'Demo Farm', 'not_configured']
   );
-  console.log('✅ Demo user ready - username: demo, password: demo123');
-} catch (err) {
-  console.log('Demo user already exists');
-}
+});
 
-// Google Sheets helper functions
-async function saveToGoogleSheets(spreadsheetId, data) {
-  if (!spreadsheetId || spreadsheetId === 'not_configured') {
-    return false;
-  }
-
+// Google Sheets setup (optional)
+let sheetsAPI = null;
+if (process.env.GOOGLE_SHEETS_CREDENTIALS) {
   try {
-    // Simple public sheets approach - requires sheet to be publicly editable
+    const credentials = JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS);
     const auth = new google.auth.GoogleAuth({
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      credentials,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets']
     });
-    
-    const sheets = google.sheets({ 
-      version: 'v4', 
-      auth: process.env.GOOGLE_API_KEY || null
-    });
-    
-    // Try to append data
-    const values = [[
-      new Date().toISOString(),
-      data.userId || '',
-      data.username || '',
-      data.farmName || '',
-      data.fieldName || '',
-      data.locationId || '',
-      data.latitude || '',
-      data.longitude || '',
-      data.plantType || '',
-      data.growthStage || '',
-      data.heightCm || '',
-      data.healthScore || '',
-      data.notes || ''
-    ]];
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: spreadsheetId,
-      range: 'A:M',
-      valueInputOption: 'RAW',
-      insertDataOption: 'INSERT_ROWS',
-      requestBody: { values }
-    });
-
-    console.log('✅ Data saved to Google Sheets');
-    return true;
-  } catch (error) {
-    console.error('⚠️ Google Sheets error (this is okay):', error.message);
-    return false;
+    sheetsAPI = google.sheets({ version: 'v4', auth });
+  } catch (err) {
+    console.log('Google Sheets integration not configured');
   }
 }
 
+// Middleware for JWT authentication
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -185,7 +137,6 @@ const authenticateToken = (req, res, next) => {
   
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
-      console.error('Token verification error:', err);
       return res.status(403).json({ error: 'Invalid token' });
     }
     req.user = user;
@@ -193,27 +144,44 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Helper function to run database queries with promises
+const runQuery = (sql, params = []) => {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function(err) {
+      if (err) reject(err);
+      else resolve({ lastID: this.lastID, changes: this.changes });
+    });
+  });
+};
+
+const getQuery = (sql, params = []) => {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+};
+
+const allQuery = (sql, params = []) => {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+};
+
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({ 
-    status: '🌱 Plant Tracker API Running',
-    version: '2.0',
-    features: [
-      '✅ User authentication',
-      '✅ Plant photo uploads',
-      '✅ Location tracking',
-      '✅ Google Sheets integration',
-      '✅ Field management'
-    ],
+    status: 'Plant Tracker API Running',
+    message: 'API is accessible from anywhere!',
     endpoints: {
-      'POST /api/auth/register': 'Create account',
-      'POST /api/auth/login': 'Login (returns JWT)',
-      'PUT /api/auth/spreadsheet': 'Set Google Sheets ID',
-      'GET /api/fields': 'Get fields',
-      'POST /api/fields': 'Create field',
-      'GET /api/plants': 'Get plants',
-      'POST /api/plants': 'Upload plant (auto-saves to Sheets)',
-      'GET /api/plants/locations': 'Get locations'
+      auth: '/api/auth/login, /api/auth/register',
+      plants: '/api/plants (GET/POST)',
+      fields: '/api/fields (GET/POST)',
+      locations: '/api/plants/locations'
     },
     demo: {
       username: 'demo',
@@ -227,80 +195,26 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-app.post('/api/auth/register', async (req, res) => {
-  const { username, email, password, farm_name, spreadsheet_id } = req.body;
-  
-  console.log('Registration attempt:', { username, email });
-  
-  if (!username || !email || !password) {
-    return res.status(400).json({ error: 'Username, email and password required' });
-  }
-  
-  try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    
-    const insert = db.prepare(
-      `INSERT INTO users (username, email, password, farm_name, spreadsheet_id) VALUES (?, ?, ?, ?, ?)`
-    );
-    
-    const result = insert.run(
-      username, 
-      email, 
-      hashedPassword, 
-      farm_name || '', 
-      spreadsheet_id || 'not_configured'
-    );
-    
-    const token = jwt.sign(
-      { id: result.lastInsertRowid, username, email },
-      JWT_SECRET,
-      { expiresIn: '30d' }
-    );
-    
-    console.log('✅ User registered:', username);
-    
-    res.json({ 
-      token,
-      user: { 
-        id: result.lastInsertRowid, 
-        username, 
-        email, 
-        farm_name,
-        spreadsheet_id: spreadsheet_id || 'not_configured'
-      }
-    });
-  } catch (err) {
-    if (err.message.includes('UNIQUE')) {
-      return res.status(400).json({ error: 'Username or email already exists' });
-    }
-    console.error('Registration error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
+// Auth endpoints
 app.post('/api/auth/login', async (req, res) => {
-  const { username, password } = req.body;
-  
-  console.log('Login attempt:', username);
-  
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password required' });
-  }
-  
   try {
-    const stmt = db.prepare(
-      `SELECT * FROM users WHERE username = ? OR email = ?`
+    const { username, password } = req.body;
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+    
+    const user = await getQuery(
+      `SELECT * FROM users WHERE username = ? OR email = ?`,
+      [username, username]
     );
-    const user = stmt.get(username, username);
     
     if (!user) {
-      console.log('❌ User not found:', username);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-      console.log('❌ Invalid password for:', username);
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    if (!isValidPassword) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
@@ -310,257 +224,282 @@ app.post('/api/auth/login', async (req, res) => {
       { expiresIn: '30d' }
     );
     
-    console.log('✅ Login successful:', username);
-    
-    res.json({ 
+    res.json({
       token,
       user: {
         id: user.id,
         username: user.username,
         email: user.email,
-        farm_name: user.farm_name,
-        spreadsheet_id: user.spreadsheet_id || 'not_configured'
+        farm_name: user.farm_name
       }
     });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Login failed' });
   }
 });
 
-app.put('/api/auth/spreadsheet', authenticateToken, (req, res) => {
-  const { spreadsheet_id } = req.body;
-  
-  if (!spreadsheet_id) {
-    return res.status(400).json({ error: 'Spreadsheet ID required' });
-  }
-  
+app.post('/api/auth/register', async (req, res) => {
   try {
-    const update = db.prepare(
-      `UPDATE users SET spreadsheet_id = ? WHERE id = ?`
+    const { username, email, password, farm_name } = req.body;
+    
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'Username, email, and password are required' });
+    }
+    
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    const result = await runQuery(
+      `INSERT INTO users (username, email, password, farm_name, spreadsheet_id) VALUES (?, ?, ?, ?, ?)`,
+      [username, email, hashedPassword, farm_name || '', 'not_configured']
     );
-    update.run(spreadsheet_id, req.user.id);
     
-    console.log('✅ Spreadsheet updated for user:', req.user.username);
-    
-    res.json({ 
-      message: 'Spreadsheet ID updated successfully',
-      spreadsheet_id 
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/fields', authenticateToken, (req, res) => {
-  const { name, size_acres, crop_type } = req.body;
-  
-  if (!name) {
-    return res.status(400).json({ error: 'Field name required' });
-  }
-  
-  try {
-    const insert = db.prepare(
-      `INSERT INTO fields (user_id, name, size_acres, crop_type) VALUES (?, ?, ?, ?)`
+    const token = jwt.sign(
+      { id: result.lastID, username, email },
+      JWT_SECRET,
+      { expiresIn: '30d' }
     );
-    const result = insert.run(req.user.id, name, size_acres || 0, crop_type || '');
     
-    console.log('✅ Field created:', name);
-    
-    res.json({ 
-      id: result.lastInsertRowid, 
-      message: 'Field created successfully' 
+    res.json({
+      token,
+      user: {
+        id: result.lastID,
+        username,
+        email,
+        farm_name
+      }
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Registration error:', err);
+    if (err.message.includes('UNIQUE')) {
+      res.status(400).json({ error: 'Username or email already exists' });
+    } else {
+      res.status(500).json({ error: 'Registration failed' });
+    }
   }
 });
 
-app.get('/api/fields', authenticateToken, (req, res) => {
-  try {
-    const stmt = db.prepare(
-      `SELECT * FROM fields WHERE user_id = ? ORDER BY created_at DESC`
-    );
-    const rows = stmt.all(req.user.id);
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
+// Plant endpoints
 app.post('/api/plants', authenticateToken, upload.single('photo'), async (req, res) => {
-  const { 
-    latitude, longitude, notes, plant_type, growth_stage, 
-    field_id, height_cm, health_score 
-  } = req.body;
-  
-  console.log('📸 Plant upload from:', req.user.username);
-  
-  if (!latitude || !longitude) {
-    return res.status(400).json({ error: 'Location (latitude, longitude) required' });
-  }
-  
-  const photo_path = req.file ? `/uploads/${req.file.filename}` : null;
-  const location_id = `${parseFloat(latitude).toFixed(6)}_${parseFloat(longitude).toFixed(6)}`;
-  
   try {
-    // Save to SQLite
-    const insert = db.prepare(
-      `INSERT INTO plants (
-        user_id, field_id, location_id, latitude, longitude, photo_path,
-        notes, plant_type, growth_stage, height_cm, health_score
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
+    const { latitude, longitude, notes, plant_type, growth_stage, field_id, height_cm, health_score } = req.body;
     
-    const result = insert.run(
-      req.user.id, 
-      field_id || null, 
-      location_id, 
-      latitude, 
-      longitude, 
-      photo_path,
-      notes || '', 
-      plant_type || '', 
-      growth_stage || '', 
-      height_cm || null, 
-      health_score || null
-    );
-    
-    // Get user info for Google Sheets
-    const userStmt = db.prepare(`SELECT username, farm_name, spreadsheet_id FROM users WHERE id = ?`);
-    const user = userStmt.get(req.user.id);
-    
-    // Get field name if provided
-    let fieldName = '';
-    if (field_id) {
-      const fieldStmt = db.prepare(`SELECT name FROM fields WHERE id = ?`);
-      const field = fieldStmt.get(field_id);
-      fieldName = field ? field.name : '';
+    if (!latitude || !longitude) {
+      return res.status(400).json({ error: 'Latitude and longitude are required' });
     }
     
-    // Try to save to Google Sheets (non-blocking)
-    let sheetsStatus = 'not_configured';
-    if (user.spreadsheet_id && user.spreadsheet_id !== 'not_configured') {
-      saveToGoogleSheets(user.spreadsheet_id, {
-        userId: req.user.id,
-        username: user.username,
-        farmName: user.farm_name,
-        fieldName: fieldName,
-        locationId: location_id,
-        latitude: latitude,
-        longitude: longitude,
-        plantType: plant_type || '',
-        growthStage: growth_stage || '',
-        heightCm: height_cm || '',
-        healthScore: health_score || '',
-        notes: notes || ''
-      }).then(saved => {
-        if (saved) {
-          const updateSync = db.prepare(`UPDATE plants SET synced_to_sheets = 1 WHERE id = ?`);
-          updateSync.run(result.lastInsertRowid);
-          console.log('✅ Synced to Google Sheets');
-        }
-      }).catch(err => {
-        console.log('⚠️ Sheets sync failed (this is okay)');
-      });
-      
-      sheetsStatus = 'attempting_sync';
+    const photo_path = req.file ? `/uploads/${req.file.filename}` : null;
+    const location_id = `${parseFloat(latitude).toFixed(6)}_${parseFloat(longitude).toFixed(6)}`;
+    
+    const result = await runQuery(
+      `INSERT INTO plants (user_id, field_id, location_id, latitude, longitude, photo_path, notes, plant_type, growth_stage, height_cm, health_score) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        req.user.id,
+        field_id || null,
+        location_id,
+        latitude,
+        longitude,
+        photo_path,
+        notes || '',
+        plant_type || '',
+        growth_stage || '',
+        height_cm || null,
+        health_score || null
+      ]
+    );
+    
+    // Sync to Google Sheets if configured
+    if (sheetsAPI && req.user.spreadsheet_id && req.user.spreadsheet_id !== 'not_configured') {
+      try {
+        await sheetsAPI.spreadsheets.values.append({
+          spreadsheetId: req.user.spreadsheet_id,
+          range: 'Plants!A:K',
+          valueInputOption: 'USER_ENTERED',
+          requestBody: {
+            values: [[
+              result.lastID,
+              location_id,
+              latitude,
+              longitude,
+              new Date().toISOString(),
+              photo_path || '',
+              notes || '',
+              plant_type || '',
+              growth_stage || '',
+              height_cm || '',
+              health_score || ''
+            ]]
+          }
+        });
+        
+        await runQuery(
+          `UPDATE plants SET synced_to_sheets = 1 WHERE id = ?`,
+          [result.lastID]
+        );
+      } catch (sheetsErr) {
+        console.error('Google Sheets sync failed:', sheetsErr);
+      }
     }
     
-    console.log('✅ Plant saved:', location_id);
-    
-    res.json({ 
-      id: result.lastInsertRowid,
+    res.json({
+      id: result.lastID,
       location_id,
-      message: 'Plant record created successfully',
-      googleSheets: sheetsStatus
+      message: 'Plant record created successfully'
     });
   } catch (err) {
-    console.error('Plant save error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('Plant creation error:', err);
+    res.status(500).json({ error: 'Failed to create plant record' });
   }
 });
 
-app.get('/api/plants', authenticateToken, (req, res) => {
-  const { latitude, longitude, radius = 10, field_id } = req.query;
-  
-  let query = `SELECT * FROM plants WHERE user_id = ?`;
-  let params = [req.user.id];
-  
-  if (field_id) {
-    query += ` AND field_id = ?`;
-    params.push(field_id);
-  }
-  
-  if (latitude && longitude) {
-    const lat = parseFloat(latitude);
-    const lon = parseFloat(longitude);
-    const rad = parseFloat(radius) / 111000;
-    query += ` AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?`;
-    params.push(lat - rad, lat + rad, lon - rad, lon + rad);
-  }
-  
-  query += ` ORDER BY timestamp DESC`;
-  
+app.get('/api/plants', authenticateToken, async (req, res) => {
   try {
-    const stmt = db.prepare(query);
-    const rows = stmt.all(...params);
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/plants/location/:location_id', authenticateToken, (req, res) => {
-  try {
-    const stmt = db.prepare(
-      `SELECT * FROM plants WHERE user_id = ? AND location_id = ? ORDER BY timestamp DESC`
+    const plants = await allQuery(
+      `SELECT * FROM plants WHERE user_id = ? ORDER BY timestamp DESC`,
+      [req.user.id]
     );
-    const rows = stmt.all(req.user.id, req.params.location_id);
-    res.json(rows);
+    res.json(plants);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Plant fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch plants' });
   }
 });
 
-app.get('/api/plants/locations', authenticateToken, (req, res) => {
+app.get('/api/plants/:id', authenticateToken, async (req, res) => {
   try {
-    const stmt = db.prepare(
-      `SELECT DISTINCT location_id, latitude, longitude, 
-       COUNT(*) as photo_count,
-       MAX(timestamp) as last_visit
+    const plant = await getQuery(
+      `SELECT * FROM plants WHERE id = ? AND user_id = ?`,
+      [req.params.id, req.user.id]
+    );
+    
+    if (!plant) {
+      return res.status(404).json({ error: 'Plant not found' });
+    }
+    
+    res.json(plant);
+  } catch (err) {
+    console.error('Plant fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch plant' });
+  }
+});
+
+// Field endpoints
+app.get('/api/fields', authenticateToken, async (req, res) => {
+  try {
+    const fields = await allQuery(
+      `SELECT * FROM fields WHERE user_id = ? ORDER BY created_at DESC`,
+      [req.user.id]
+    );
+    res.json(fields);
+  } catch (err) {
+    console.error('Field fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch fields' });
+  }
+});
+
+app.post('/api/fields', authenticateToken, async (req, res) => {
+  try {
+    const { name, size_acres, crop_type } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ error: 'Field name is required' });
+    }
+    
+    const result = await runQuery(
+      `INSERT INTO fields (user_id, name, size_acres, crop_type) VALUES (?, ?, ?, ?)`,
+      [req.user.id, name, size_acres || 0, crop_type || '']
+    );
+    
+    res.json({
+      id: result.lastID,
+      message: 'Field created successfully'
+    });
+  } catch (err) {
+    console.error('Field creation error:', err);
+    res.status(500).json({ error: 'Failed to create field' });
+  }
+});
+
+// Location aggregation endpoint
+app.get('/api/plants/locations', authenticateToken, async (req, res) => {
+  try {
+    const locations = await allQuery(
+      `SELECT 
+        location_id,
+        latitude,
+        longitude,
+        COUNT(*) as photo_count,
+        MAX(timestamp) as last_visit
        FROM plants 
-       WHERE user_id = ?
-       GROUP BY location_id
-       ORDER BY last_visit DESC`
+       WHERE user_id = ? 
+       GROUP BY location_id 
+       ORDER BY last_visit DESC`,
+      [req.user.id]
     );
-    const rows = stmt.all(req.user.id);
-    res.json(rows);
+    res.json(locations);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Location fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch locations' });
   }
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Server error:', err);
-  res.status(500).json({ 
-    error: 'Internal server error',
-    message: err.message 
-  });
+// Settings endpoints
+app.get('/api/settings', authenticateToken, async (req, res) => {
+  try {
+    const user = await getQuery(
+      `SELECT id, username, email, farm_name, spreadsheet_id FROM users WHERE id = ?`,
+      [req.user.id]
+    );
+    res.json(user);
+  } catch (err) {
+    console.error('Settings fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch settings' });
+  }
 });
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log('');
-  console.log('🌱 Plant Tracker Pro Server Started!');
-  console.log('=====================================');
-  console.log(`📡 Local: http://localhost:${PORT}`);
-  console.log(`📡 Network: http://0.0.0.0:${PORT}`);
-  console.log('');
-  console.log('Demo Account:');
-  console.log('  Username: demo');
-  console.log('  Password: demo123');
-  console.log('');
-  console.log('✅ Ready for connections!');
-  console.log('=====================================');
+app.put('/api/settings', authenticateToken, async (req, res) => {
+  try {
+    const { farm_name, spreadsheet_id } = req.body;
+    
+    await runQuery(
+      `UPDATE users SET farm_name = ?, spreadsheet_id = ? WHERE id = ?`,
+      [farm_name || '', spreadsheet_id || 'not_configured', req.user.id]
+    );
+    
+    res.json({ message: 'Settings updated successfully' });
+  } catch (err) {
+    console.error('Settings update error:', err);
+    res.status(500).json({ error: 'Failed to update settings' });
+  }
+});
+
+// Start server
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`
+╔════════════════════════════════════════════╗
+║     Plant Tracker API - PUBLIC ACCESS      ║
+╠════════════════════════════════════════════╣
+║  Status: ✓ Running                         ║
+║  Port: ${PORT}                                ║
+║  CORS: Enabled for ALL origins            ║
+║                                            ║
+║  Demo Account:                            ║
+║  Username: demo                           ║
+║  Password: demo123                        ║
+║                                            ║
+║  Access from ANYWHERE:                    ║
+║  - Expo Go                                ║
+║  - Web browsers                           ║
+║  - Mobile apps                            ║
+║  - Any network (5G/LTE/WiFi)             ║
+╚════════════════════════════════════════════╝
+  `);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, closing database connection...');
+  db.close();
+  process.exit(0);
 });
