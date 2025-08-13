@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: plant-tracker-pro-live
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && node server-public.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+    healthCheckPath: /health
+    repo: https://github.com/plantrack/plant-tracker-pro
