@@ -1,0 +1,22 @@
+name: plant-tracker-api
+region: nyc
+services:
+- environment_slug: node-js
+  github:
+    branch: main
+    deploy_on_push: true
+    repo: YOUR_GITHUB_REPO
+  http_port: 3000
+  instance_count: 1
+  instance_size_slug: basic-xxs
+  name: plant-tracker-api
+  run_command: node server-public.js
+  build_command: npm install
+  source_dir: /backend
+  envs:
+  - key: NODE_ENV
+    value: production
+  - key: PORT
+    value: "3000"
+  - key: JWT_SECRET
+    value: "plant-tracker-secret-key-2024-production"

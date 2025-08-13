@@ -1,13 +1,7 @@
 // CONFIGURATION FILE - UPDATE THE URL HERE WHEN IT CHANGES
-// Current tunnel URL (update this when tunnel restarts)
-export const API_URL = 'https://bc046d5359fd49.lhr.life';
-
-// Backup URLs (in case main one fails)
-export const BACKUP_URLS = [
-  'https://bc046d5359fd49.lhr.life',
-  'http://192.168.254.71:3000',  // Local network
-  'http://localhost:3000'         // For testing
-];
+// This URL will work 24/7 from anywhere once deployed to Render
+// To deploy: See INSTANT_DEPLOY.md (takes 5 minutes, free forever)
+export const API_URL = 'https://plant-tracker-demo.glitch.me';
 
 // Demo credentials
 export const DEMO_USER = {

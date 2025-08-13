@@ -2,11 +2,10 @@
   "name": "plant-tracker-backend",
   "version": "1.0.0",
   "description": "Backend API for Plant Tracker Pro",
-  "main": "server.js",
+  "main": "server-public.js",
   "scripts": {
-    "start": "node server-final.js",
-    "start:old": "node server.js",
-    "dev": "nodemon server-final.js"
+    "start": "node server-public.js",
+    "dev": "nodemon server-public.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -19,5 +18,8 @@
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=14.0.0"
   }
 }

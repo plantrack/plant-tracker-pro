@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: plant-tracker-api
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server-public.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
